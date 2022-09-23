@@ -1,0 +1,4 @@
+node_modules
+*.ps1
+!credentials
+!credentials/*.json
