@@ -1,2 +1,4 @@
 node_modules
+cloudbuild.json
 *.ps1
+*.deb

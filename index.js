@@ -5,10 +5,7 @@ const app = express()
 const {spawn} = require('child_process');
 const archiver = require('archiver');
 const fs = require("fs");
-const {
-    DB_USER,
-    DB_PASS,
-    DB_HOST,
+let {
     DB_URI,
     DB_NAME,
     GCS_KEY,
@@ -22,6 +19,9 @@ const GCS = new Storage({
 
 app.get("/", (req, res) => {
     if((req.header("X-TOKEN") || (req.query && req.query.token)) === (process.env.SecretKey || "---secret---")){
+        if(req.query && req.query.db_name){
+            DB_NAME = req.query.db_name
+        }
         const target = path.join(tmpdir(),"gcr-mongodump")
         const file = path.join(target,`dump.zip`)
 
@@ -39,12 +39,23 @@ app.get("/", (req, res) => {
         archive.on('error', function(err) {
             throw err;
         });
-
-        const child = spawn("mongodump", [
-            "--uri",DB_URI,
-            "--db",DB_NAME,
-            "--out",target
-        ])
+        let opt = [
+            "--uri",DB_URI
+        ]
+        let compressed = false
+        if(DB_NAME){
+            opt.push("--db")
+            opt.push(DB_NAME)
+            opt.push("--out")
+            opt.push(target)
+        }else{
+            opt.push("--archive")
+            opt.push(file)
+            opt.push("--gzip")
+            compressed = true
+        }
+        console.log(target, compressed, opt)
+        const child = spawn("mongodump", opt)
         let errMessage = ""
         child.stderr.on("data", (chunk) => {
             errMessage += chunk
@@ -53,28 +64,45 @@ app.get("/", (req, res) => {
             console.log("err",errMessage)
         })
         child.on("close", (code) => {
-            const output = path.join(target, DB_NAME)
+            if(!compressed){
+                const output = path.join(target, DB_NAME)
 
-            if(fs.existsSync(output)){
-                archive.directory(output, DB_NAME)
+                if(fs.existsSync(output)){
+                    archive.directory(output, DB_NAME)
 
-                archive.finalize().then(async () => {
-                    const date = new Date()
-                    const bucket = GCS.bucket(GCS_BUCKET)
-                    const format = () => {
-                        let x = date.getFullYear().toString()
-                        x += date.getMonth().toString().padStart(2,"0")
-                        x += date.getDate().toString().padStart(2,"0")
-                        return x
-                    }
-                    await bucket.upload(file, {
-                        destination: path.join(GCS_PREFIX, format()+"-"+DB_NAME)
-                    })
-                    res.send("it works")
-                });
+                    archive.finalize().then(async () => {
+                        const date = new Date()
+                        const bucket = GCS.bucket(GCS_BUCKET)
+                        const format = () => {
+                            let x = date.getFullYear().toString()
+                            x += date.getMonth().toString().padStart(2,"0")
+                            x += date.getDate().toString().padStart(2,"0")
+                            return x
+                        }
+                        await bucket.upload(file, {
+                            destination: path.join(GCS_PREFIX, format()+"-"+DB_NAME)
+                        })
+                        res.send("it works")
+                    });
 
+                }else{
+                    res.status(500).send("it did not working : "+code)
+                }
             }else{
-                res.status(500).send("it did not working : "+code)
+                const date = new Date()
+                const bucket = GCS.bucket(GCS_BUCKET)
+                const format = () => {
+                    let x = date.getFullYear().toString()
+                    x += date.getMonth().toString().padStart(2,"0")
+                    x += date.getDate().toString().padStart(2,"0")
+                    return x
+                }
+                bucket.upload(file, {
+                    destination: path.join(GCS_PREFIX, format()+".zip")
+                }).then(() => {
+                    res.send("it works (2)")
+                })
+
             }
 
         })
